@@ -146,7 +146,7 @@ header .who{font-size:12px;opacity:.9}
       <button class="btn sec" id="dPrint">🖨 Print / Save DTR (PDF)</button>
     </div>
     <p class="muted">Tip: in the print window choose “Save as PDF” as the destination to save the DTR.</p>
-    <div class="tblwrap"><table id="dtrTbl"><thead><tr><th>Date</th><th>ID</th><th>Name</th><th>AM In</th><th>AM Out</th><th>PM In</th><th>PM Out</th><th>Total</th></tr></thead><tbody></tbody></table></div>
+    <div class="tblwrap"><table id="dtrTbl"><thead><tr><th>Date</th><th>ID</th><th>Name</th><th>AM In</th><th>AM Out</th><th>PM In</th><th>PM Out</th><th>Total</th><th>Action</th></tr></thead><tbody></tbody></table></div>
   </section>
 
   <!-- SETTINGS -->
@@ -168,7 +168,7 @@ header .who{font-size:12px;opacity:.9}
 <div class="modal" id="delModal"><div class="box">
   <div style="font-size:34px">🗑</div>
   <div style="font-weight:700;font-size:18px;margin:6px 0" id="delTitle">Remove employee?</div>
-  <div class="muted">Past DTR records are kept. Enter the delete password to confirm.</div>
+  <div class="muted" id="delNote">Enter the delete password to confirm.</div>
   <input id="delPin" type="password" autocomplete="off" placeholder="Delete password" style="width:100%;margin-top:12px;text-align:center">
   <div class="row" style="justify-content:center;margin:14px 0 0"><button class="btn red" id="delOk">Delete</button><button class="btn sec" id="delCancel">Cancel</button></div>
 </div></div>
@@ -271,19 +271,30 @@ $('#addEmp').onclick=async()=>{
     await loadEmployees();showQR(r.employee.id);
   }catch(e){toast(e.message,4000);}
 };
-let delId=null;
-function removeEmp(id){
-  const e=employees.find(x=>x.id===id);delId=id;
-  $('#delTitle').textContent='Remove '+(e?e.name:id)+'?';
+let delJob=null;
+function openDel(title,note,job){
+  delJob=job;$('#delTitle').textContent=title;$('#delNote').textContent=note;
   $('#delPin').value='';$('#delModal').classList.add('show');setTimeout(()=>$('#delPin').focus(),100);
 }
-$('#delCancel').onclick=()=>{$('#delModal').classList.remove('show');delId=null;};
+function removeEmp(id){
+  const e=employees.find(x=>x.id===id);
+  openDel('Remove '+(e?e.name:id)+'?','Past DTR records are kept. Enter the delete password to confirm.',{type:'emp',id});
+}
+function removeDTR(date,id){
+  const r=dtrRows.find(x=>x.date===date&&x.id===id);
+  openDel('Delete DTR of '+(r?r.name:id)+' on '+date+'?','This permanently removes that day\'s record. Enter the delete password to confirm.',{type:'dtr',date,id});
+}
+$('#delCancel').onclick=()=>{$('#delModal').classList.remove('show');delJob=null;};
 $('#delPin').addEventListener('keydown',e=>{if(e.key==='Enter')$('#delOk').click();});
 $('#delOk').onclick=async()=>{
-  const pw=$('#delPin').value;if(!pw||!delId)return toast('Enter the delete password');
+  const pw=$('#delPin').value;if(!pw||!delJob)return toast('Enter the delete password');
   try{
-    await post('removeEmployee',{id:delId,deletePin:pw});
-    $('#delModal').classList.remove('show');delId=null;toast('Employee removed');loadEmployees();
+    if(delJob.type==='emp'){
+      await post('removeEmployee',{id:delJob.id,deletePin:pw});toast('Employee removed');loadEmployees();
+    }else{
+      await post('deleteDTR',{date:delJob.date,id:delJob.id,deletePin:pw});toast('DTR record deleted');loadDTR();
+    }
+    $('#delModal').classList.remove('show');delJob=null;
   }catch(err){toast(err.message,4000);$('#delPin').value='';$('#delPin').focus();}
 };
 function makeQR(el,text,size){el.innerHTML='';new QRCode(el,{text,width:size,height:size,correctLevel:QRCode.CorrectLevel.M});}
@@ -323,7 +334,7 @@ async function loadDTR(){
 const filtered=()=>{const id=$('#dEmp').value;return dtrRows.filter(r=>!id||r.id===id).sort((a,b)=>a.date.localeCompare(b.date)||a.name.localeCompare(b.name));};
 function renderDTR(){
   const l=filtered();
-  $('#dtrTbl tbody').innerHTML=l.length?l.map(r=>`<tr><td>${esc(r.date)}</td><td>${esc(r.id)}</td><td>${esc(r.name)}</td><td>${esc(r.amIn)}</td><td>${esc(r.amOut)}</td><td>${esc(r.pmIn)}</td><td>${esc(r.pmOut)}</td><td>${hm(totalMin(r))}</td></tr>`).join(''):'<tr><td colspan="8" class="muted">No records for this month.</td></tr>';
+  $('#dtrTbl tbody').innerHTML=l.length?l.map(r=>`<tr><td>${esc(r.date)}</td><td>${esc(r.id)}</td><td>${esc(r.name)}</td><td>${esc(r.amIn)}</td><td>${esc(r.amOut)}</td><td>${esc(r.pmIn)}</td><td>${esc(r.pmOut)}</td><td>${hm(totalMin(r))}</td><td><button class="btn sm red" onclick="removeDTR('${esc(r.date)}','${esc(r.id)}')">Delete</button></td></tr>`).join(''):'<tr><td colspan="9" class="muted">No records for this month.</td></tr>';
 }
 $('#dLoad').onclick=loadDTR;$('#dEmp').onchange=renderDTR;$('#dMonth').onchange=loadDTR;
 $('#dCsv').onclick=()=>{
