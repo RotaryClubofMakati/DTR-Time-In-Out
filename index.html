@@ -48,6 +48,11 @@ th{background:#f4f7fc;font-size:12px;text-transform:uppercase;letter-spacing:.04
 .qrbox{display:inline-block;padding:10px;background:#fff}
 #toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#1b2430;color:#fff;padding:10px 18px;border-radius:10px;display:none;z-index:99;font-size:14px}
 #printArea{display:none}
+.scanbox{padding:0!important;overflow:hidden;padding-bottom:20px!important}
+.scanlabel{font-size:34px;font-weight:800;color:#fff;padding:20px 10px;letter-spacing:.05em}
+.scanbox.in .scanlabel{background:var(--ok)}.scanbox.out .scanlabel{background:#2563eb}.scanbox.dup .scanlabel{background:var(--warn)}.scanbox.err .scanlabel{background:var(--bad)}
+.scanname{font-size:24px;font-weight:700;margin:16px 12px 4px}.scantime{font-size:40px;font-weight:800;font-variant-numeric:tabular-nums}
+.scanbox .muted{margin:4px 12px}
 #login{position:fixed;inset:0;background:linear-gradient(135deg,#123f94,#1a5fd0);z-index:100;display:none;align-items:center;justify-content:center;padding:16px}
 #login.show{display:flex}
 #login .box{background:#fff;border-radius:16px;padding:26px;max-width:340px;width:100%;text-align:center}
@@ -116,8 +121,8 @@ header .who{font-size:12px;opacity:.9}
       </div>
       <div>
         <h2>Today's Log</h2>
-        <div class="tblwrap"><table id="todayTbl"><thead><tr><th>Name</th><th>AM In</th><th>AM Out</th><th>PM In</th><th>PM Out</th></tr></thead><tbody></tbody></table></div>
-        <p class="muted">Each scan fills the next slot in order: AM In → AM Out → PM In → PM Out.</p>
+        <div class="tblwrap"><table id="todayTbl"><thead><tr><th>Name</th><th>Time In</th><th>Time Out</th></tr></thead><tbody></tbody></table></div>
+        <p class="muted">First scan of the day = TIME IN, next scan = TIME OUT. A popup confirms every scan.</p>
       </div>
     </div>
   </section>
@@ -146,7 +151,7 @@ header .who{font-size:12px;opacity:.9}
       <button class="btn sec" id="dPrint">🖨 Print / Save DTR (PDF)</button>
     </div>
     <p class="muted">Tip: in the print window choose “Save as PDF” as the destination to save the DTR.</p>
-    <div class="tblwrap"><table id="dtrTbl"><thead><tr><th>Date</th><th>ID</th><th>Name</th><th>AM In</th><th>AM Out</th><th>PM In</th><th>PM Out</th><th>Total</th><th>Action</th></tr></thead><tbody></tbody></table></div>
+    <div class="tblwrap"><table id="dtrTbl"><thead><tr><th>Date</th><th>ID</th><th>Name</th><th>Time In</th><th>Time Out</th><th>Total</th><th>Action</th></tr></thead><tbody></tbody></table></div>
   </section>
 
   <!-- SETTINGS -->
@@ -171,6 +176,14 @@ header .who{font-size:12px;opacity:.9}
   <div class="muted" id="delNote">Enter the delete password to confirm.</div>
   <input id="delPin" type="password" autocomplete="off" placeholder="Delete password" style="width:100%;margin-top:12px;text-align:center">
   <div class="row" style="justify-content:center;margin:14px 0 0"><button class="btn red" id="delOk">Delete</button><button class="btn sec" id="delCancel">Cancel</button></div>
+</div></div>
+<div class="modal" id="scanModal"><div class="box scanbox" id="scanBox">
+  <div class="scanlabel" id="scanLabel">TIME IN</div>
+  <div class="scanname" id="scanName"></div>
+  <div class="scantime" id="scanTime"></div>
+  <div class="muted" id="scanSub"></div>
+  <button class="btn" id="scanOk" style="margin-top:16px;min-width:140px">OK</button>
+  <div class="muted" style="margin-top:8px;font-size:12px" id="scanAuto"></div>
 </div></div>
 <div id="toast"></div>
 <div id="printArea"></div>
@@ -203,7 +216,8 @@ const todayStr=()=>new Date().toLocaleDateString('en-CA',{timeZone:TZ});
 const monthStr=()=>todayStr().slice(0,7);
 setInterval(()=>{const d=new Date();$('#clock').textContent=d.toLocaleTimeString('en-US',{timeZone:TZ});$('#dateLbl').textContent=d.toLocaleDateString('en-US',{timeZone:TZ,weekday:'long',year:'numeric',month:'long',day:'numeric'});},1000);
 const mins=t=>{if(!t)return null;const[a,b]=t.split(':').map(Number);return a*60+b;};
-function totalMin(r){let t=0;const a=mins(r.amIn),b=mins(r.amOut),c=mins(r.pmIn),d=mins(r.pmOut);if(a!=null&&b!=null&&b>a)t+=b-a;if(c!=null&&d!=null&&d>c)t+=d-c;return t;}
+function totalMin(r){const a=mins(r.timeIn),b=mins(r.timeOut);return(a!=null&&b!=null&&b>a)?b-a:0;}
+function f12(t){if(!t)return'';const[h,m]=t.split(':').map(Number);return((h%12)||12)+':'+String(m).padStart(2,'0')+' '+(h<12?'AM':'PM');}
 const hm=m=>m?Math.floor(m/60)+':'+String(m%60).padStart(2,'0'):'';
 function beep(ok){try{const c=new (window.AudioContext||window.webkitAudioContext)(),o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.frequency.value=ok?880:220;g.gain.value=.15;o.start();o.stop(c.currentTime+(ok?.15:.4));}catch(e){}}
 
@@ -231,22 +245,43 @@ function onScan(text){
 }
 $('#manualBtn').onclick=()=>{const v=$('#manualId').value.trim();if(v){processScan(v);$('#manualId').value='';}};
 $('#manualId').addEventListener('keydown',e=>{if(e.key==='Enter')$('#manualBtn').click();});
+let popTimer=null;
+function showScanPopup(kind,label,name,time,sub){
+  const b=$('#scanBox');b.className='box scanbox '+kind;
+  $('#scanLabel').textContent=label;$('#scanName').textContent=name||'';
+  $('#scanTime').textContent=time||'';$('#scanSub').textContent=sub||'';
+  $('#scanModal').classList.add('show');
+  let n=kind==='in'||kind==='out'?4:6;
+  clearInterval(popTimer);
+  const tick=()=>{$('#scanAuto').textContent='Closing in '+n+'s…';if(n--<=0)closeScanPopup();};
+  tick();popTimer=setInterval(tick,1000);
+}
+function closeScanPopup(){
+  clearInterval(popTimer);$('#scanModal').classList.remove('show');
+  lastTime=Date.now();busy=false; // scanning resumes only after the popup is closed
+}
+$('#scanOk').onclick=closeScanPopup;
 async function processScan(id){
   busy=true;const R=$('#result');R.className='';R.innerHTML='<span class="muted">Saving…</span>';
   try{
     const r=await post('scan',{id});
+    const isIn=r.slot===0;
     R.className='ok';
-    R.innerHTML=`<div class="nm">${esc(r.employee.name)}</div><div class="ac">${esc(r.label)} — ${esc(r.time)}</div><div class="muted">${esc(r.employee.id)} • ${esc(r.date)}</div>`;
+    R.innerHTML=`<div class="nm">${esc(r.employee.name)}</div><div class="ac">${esc(r.label)} — ${esc(f12(r.time))}</div><div class="muted">${esc(r.employee.id)} • ${esc(r.date)}</div>`;
     beep(true);loadToday();
+    showScanPopup(isIn?'in':'out',r.label,r.employee.name,f12(r.time),r.employee.id+' • '+r.date);
   }catch(e){
+    const code=e.data&&e.data.code;
     R.className='err';R.innerHTML=`<div class="nm">⚠ ${esc(e.message)}</div>`;beep(false);
-  }finally{busy=false;}
+    if(code==='dup'||code==='done') showScanPopup('dup',code==='dup'?'ALREADY TIMED IN':'ALREADY TIMED OUT',(e.data.employee||{}).name,'',e.message);
+    else showScanPopup('err','NOT RECORDED','',  '',e.message);
+  }
 }
 async function loadToday(){
   try{
     const {rows:list}=await get('today');
     const tb=$('#todayTbl tbody');
-    tb.innerHTML=list.length?list.map(r=>`<tr><td>${esc(r.name)}</td><td>${esc(r.amIn)}</td><td>${esc(r.amOut)}</td><td>${esc(r.pmIn)}</td><td>${esc(r.pmOut)}</td></tr>`).join(''):'<tr><td colspan="5" class="muted">No logs yet today.</td></tr>';
+    tb.innerHTML=list.length?list.map(r=>`<tr><td>${esc(r.name)}</td><td>${esc(f12(r.timeIn))}</td><td>${esc(f12(r.timeOut))}</td></tr>`).join(''):'<tr><td colspan="3" class="muted">No logs yet today.</td></tr>';
   }catch(e){}
 }
 
@@ -334,14 +369,14 @@ async function loadDTR(){
 const filtered=()=>{const id=$('#dEmp').value;return dtrRows.filter(r=>!id||r.id===id).sort((a,b)=>a.date.localeCompare(b.date)||a.name.localeCompare(b.name));};
 function renderDTR(){
   const l=filtered();
-  $('#dtrTbl tbody').innerHTML=l.length?l.map(r=>`<tr><td>${esc(r.date)}</td><td>${esc(r.id)}</td><td>${esc(r.name)}</td><td>${esc(r.amIn)}</td><td>${esc(r.amOut)}</td><td>${esc(r.pmIn)}</td><td>${esc(r.pmOut)}</td><td>${hm(totalMin(r))}</td><td><button class="btn sm red" onclick="removeDTR('${esc(r.date)}','${esc(r.id)}')">Delete</button></td></tr>`).join(''):'<tr><td colspan="9" class="muted">No records for this month.</td></tr>';
+  $('#dtrTbl tbody').innerHTML=l.length?l.map(r=>`<tr><td>${esc(r.date)}</td><td>${esc(r.id)}</td><td>${esc(r.name)}</td><td>${esc(f12(r.timeIn))}</td><td>${esc(f12(r.timeOut))}</td><td>${hm(totalMin(r))}</td><td><button class="btn sm red" onclick="removeDTR('${esc(r.date)}','${esc(r.id)}')">Delete</button></td></tr>`).join(''):'<tr><td colspan="7" class="muted">No records for this month.</td></tr>';
 }
 $('#dLoad').onclick=loadDTR;$('#dEmp').onchange=renderDTR;$('#dMonth').onchange=loadDTR;
 $('#dCsv').onclick=()=>{
   const l=filtered();if(!l.length)return toast('No records to export');
   const q=v=>'"'+String(v??'').replace(/"/g,'""')+'"';
-  const lines=[['Date','Employee ID','Name','AM In','AM Out','PM In','PM Out','Total (H:MM)','Total Hours (decimal)'].map(q).join(',')];
-  l.forEach(r=>{const t=totalMin(r);lines.push([r.date,r.id,r.name,r.amIn,r.amOut,r.pmIn,r.pmOut,hm(t),(t/60).toFixed(2)].map(q).join(','));});
+  const lines=[['Date','Employee ID','Name','Time In','Time Out','Total (H:MM)','Total Hours (decimal)'].map(q).join(',')];
+  l.forEach(r=>{const t=totalMin(r);lines.push([r.date,r.id,r.name,r.timeIn,r.timeOut,hm(t),(t/60).toFixed(2)].map(q).join(','));});
   const blob=new Blob(['\ufeff'+lines.join('\r\n')],{type:'text/csv;charset=utf-8'});
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);
   const who=$('#dEmp').value||'ALL';a.download=`DTR_${$('#dMonth').value}_${who}.csv`;a.click();URL.revokeObjectURL(a.href);
@@ -361,12 +396,12 @@ $('#dPrint').onclick=()=>{
     const e=byEmp[id];let tot=0,body='';
     for(let d=1;d<=days;d++){
       const ds=`${m}-${String(d).padStart(2,'0')}`,r=e.rows[ds]||{},w=new Date(y,mo-1,d).getDay(),t=totalMin(r);tot+=t;
-      body+=`<tr class="${w===0||w===6?'we':''}"><td>${d}</td><td>${wd[w]}</td><td>${esc(r.amIn||'')}</td><td>${esc(r.amOut||'')}</td><td>${esc(r.pmIn||'')}</td><td>${esc(r.pmOut||'')}</td><td>${hm(t)}</td></tr>`;
+      body+=`<tr class="${w===0||w===6?'we':''}"><td>${d}</td><td>${wd[w]}</td><td>${esc(f12(r.timeIn))}</td><td>${esc(f12(r.timeOut))}</td><td>${hm(t)}</td></tr>`;
     }
     return `<div class="dtr-page"><h3>DAILY TIME RECORD</h3><div class="sub">${esc(ORG)}</div>
       <div class="info"><div><b>Name:</b> ${esc(e.name)}${e.position?' ('+esc(e.position)+')':''}</div><div><b>ID:</b> ${esc(id)}</div><div><b>Month:</b> ${esc(label)}</div></div>
-      <table><thead><tr><th rowspan="2">Day</th><th rowspan="2"></th><th colspan="2">A.M.</th><th colspan="2">P.M.</th><th rowspan="2">Hours</th></tr><tr><th>Arrival</th><th>Departure</th><th>Arrival</th><th>Departure</th></tr></thead>
-      <tbody>${body}<tr><td colspan="6" style="text-align:right"><b>TOTAL HOURS</b></td><td><b>${hm(tot)||'0:00'}</b></td></tr></tbody></table>
+      <table><thead><tr><th>Day</th><th></th><th>Time In</th><th>Time Out</th><th>Hours</th></tr></thead>
+      <tbody>${body}<tr><td colspan="4" style="text-align:right"><b>TOTAL HOURS</b></td><td><b>${hm(tot)||'0:00'}</b></td></tr></tbody></table>
       <div class="cert">I certify on my honor that the above is a true and correct report of the hours of work performed, record of which was made daily at the time of arrival at and departure from office.</div>
       <div class="sig"><div>Employee Signature</div><div>Verified by / In-Charge</div></div></div>`;
   }).join('');

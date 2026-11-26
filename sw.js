@@ -1,5 +1,5 @@
 // Caches the app shell + QR libraries so the app opens fast. API calls always go to the network.
-const CACHE = 'qr-dtr-v3';
+const CACHE = 'qr-dtr-v4';
 const SHELL = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
